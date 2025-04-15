@@ -27,7 +27,7 @@ def analyze_patient_cohorts(input_file: str) -> pl.DataFrame:
     # BUG: Doesn't check for presence/structure of input
     # FIX: Check if BMI, Glucose, and Age columns exist and are numeric
     required_cols = ["BMI", "Glucose", "Age"]
-    schema = lazy_df.schema  # dict: {colname: dtype}
+    schema = lazy_df.collect_schema()
     
     missing = [col for col in required_cols if col not in schema]
     if missing:
@@ -61,10 +61,14 @@ def analyze_patient_cohorts(input_file: str) -> pl.DataFrame:
         # FIX: use group_by() - homologous function for LazyFrames
         lambda df: df.group_by("bmi_range").agg([
             pl.col("Glucose").mean().alias("avg_glucose"),
-            pl.count().alias("patient_count"),
+            # BUG: pl.count() is apparently deprecated
+            # FIX: use pl.len()
+            pl.len().alias("patient_count"),
             pl.col("Age").mean().alias("avg_age")
         ])
-    ).collect(streaming=True)
+        # BUG: Apparently streaming is going to be deprecated
+        # FIX: Best practice is to remove the streaming argument (polars will use its default functionality)
+    ).collect()
     
     return cohort_results
 
