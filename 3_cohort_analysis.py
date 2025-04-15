@@ -1,4 +1,5 @@
 import polars as pl
+import os
 
 def analyze_patient_cohorts(input_file: str) -> pl.DataFrame:
     """
@@ -14,24 +15,51 @@ def analyze_patient_cohorts(input_file: str) -> pl.DataFrame:
         - patient_count: Number of patients by BMI range
         - avg_age: Mean age by BMI range
     """
+    # BUG: Should check if the file exists
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(f"The file {input_file} does not exist.")
+
     # Convert CSV to Parquet for efficient processing
     pl.read_csv(input_file).write_parquet("patients_large.parquet")
+
+    lazy_df = pl.scan_parquet("patients_large.parquet")
+
+    # BUG: Doesn't check for presence/structure of input
+    # FIX: Check if BMI, Glucose, and Age columns exist and are numeric
+    required_cols = ["BMI", "Glucose", "Age"]
+    schema = lazy_df.schema  # dict: {colname: dtype}
+    
+    missing = [col for col in required_cols if col not in schema]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+    
+    numeric_types = (pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+                     pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+                     pl.Float32, pl.Float64)
+
+    non_numeric = [col for col in required_cols if not isinstance(schema[col], numeric_types)]
+    if non_numeric:
+        raise TypeError(f"Found non-numeric column: {non_numeric}")
     
     # Create a lazy query to analyze cohorts
-    cohort_results = pl.scan_parquet("patients_large.parquet").pipe(
+    cohort_results = lazy_df.pipe(
         lambda df: df.filter((pl.col("BMI") >= 10) & (pl.col("BMI") <= 60))
     ).pipe(
         lambda df: df.select(["BMI", "Glucose", "Age"])
     ).pipe(
         lambda df: df.with_columns(
             pl.col("BMI").cut(
-                breaks=[10, 18.5, 25, 30, 60],
+                # BUG: Mismatch between number of breaks and labels, the labels should be 1 more than the number of breaks
+                # FIX: Remove the lower and upper breaks (since we are already filtering between 10 and 60 as above)
+                breaks=[18.5, 25, 30],
                 labels=["Underweight", "Normal", "Overweight", "Obese"],
                 left_closed=True
             ).alias("bmi_range")
         )
     ).pipe(
-        lambda df: df.groupby("bmi_range").agg([
+        # BUG: groupby() doesn't exist for LazyFrame objects
+        # FIX: use group_by() - homologous function for LazyFrames
+        lambda df: df.group_by("bmi_range").agg([
             pl.col("Glucose").mean().alias("avg_glucose"),
             pl.count().alias("patient_count"),
             pl.col("Age").mean().alias("avg_age")
